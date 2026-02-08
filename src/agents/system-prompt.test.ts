@@ -109,7 +109,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("`[System Message] ...` blocks are internal context");
-    expect(prompt).toContain("Never claim the user can see internal logs/context");
+    expect(prompt).toContain("are not user-visible by default");
   });
 
   it("lists available tools when provided", () => {

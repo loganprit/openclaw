@@ -45,6 +45,14 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
   return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("subagent:"));
 }
 
+export function getSubagentDepth(sessionKey: string | undefined | null): number {
+  const raw = (sessionKey ?? "").trim().toLowerCase();
+  if (!raw) {
+    return 0;
+  }
+  return raw.split(":subagent:").length - 1;
+}
+
 export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
   const raw = (sessionKey ?? "").trim();
   if (!raw) {

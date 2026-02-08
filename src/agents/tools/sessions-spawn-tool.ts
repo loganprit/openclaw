@@ -5,17 +5,14 @@ import type { AnyAgentTool } from "./common.js";
 import { formatThinkingLevels, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
-import {
-  isSubagentSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { getSubagentDepth } from "../../sessions/session-key-utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import { buildSubagentSystemPrompt } from "../subagent-announce.js";
-import { registerSubagentRun } from "../subagent-registry.js";
+import { countActiveRunsForSession, registerSubagentRun } from "../subagent-registry.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
   resolveDisplaySessionKey,
@@ -119,12 +116,6 @@ export function createSessionsSpawnTool(opts?: {
       const cfg = loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
       const requesterSessionKey = opts?.agentSessionKey;
-      if (typeof requesterSessionKey === "string" && isSubagentSessionKey(requesterSessionKey)) {
-        return jsonResult({
-          status: "forbidden",
-          error: "sessions_spawn is not allowed from sub-agent sessions",
-        });
-      }
       const requesterInternalKey = requesterSessionKey
         ? resolveInternalSessionKey({
             key: requesterSessionKey,
@@ -137,6 +128,24 @@ export function createSessionsSpawnTool(opts?: {
         alias,
         mainKey,
       });
+
+      const callerDepth = getSubagentDepth(requesterInternalKey);
+      const maxSpawnDepth = cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? 1;
+      if (callerDepth >= maxSpawnDepth) {
+        return jsonResult({
+          status: "forbidden",
+          error: `sessions_spawn is not allowed at this depth (current depth: ${callerDepth}, max: ${maxSpawnDepth})`,
+        });
+      }
+
+      const maxChildren = cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? 5;
+      const activeChildren = countActiveRunsForSession(requesterInternalKey);
+      if (activeChildren >= maxChildren) {
+        return jsonResult({
+          status: "forbidden",
+          error: `sessions_spawn has reached max active children for this session (${activeChildren}/${maxChildren})`,
+        });
+      }
 
       const requesterAgentId = normalizeAgentId(
         opts?.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,

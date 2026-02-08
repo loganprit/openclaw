@@ -425,6 +425,24 @@ export function listSubagentRunsForRequester(requesterSessionKey: string): Subag
   return [...subagentRuns.values()].filter((entry) => entry.requesterSessionKey === key);
 }
 
+export function countActiveRunsForSession(requesterSessionKey: string): number {
+  const key = requesterSessionKey.trim();
+  if (!key) {
+    return 0;
+  }
+  let count = 0;
+  for (const entry of subagentRuns.values()) {
+    if (entry.requesterSessionKey !== key) {
+      continue;
+    }
+    if (typeof entry.endedAt === "number") {
+      continue;
+    }
+    count += 1;
+  }
+  return count;
+}
+
 export function initSubagentRegistry() {
   restoreSubagentRunsOnce();
 }
