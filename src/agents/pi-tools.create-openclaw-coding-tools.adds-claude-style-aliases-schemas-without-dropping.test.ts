@@ -263,6 +263,7 @@ describe("createOpenClawCodingTools", () => {
       "sessions_history",
       "sessions_send",
       "sessions_spawn",
+      "subagents",
       "session_status",
       "image",
     ]);
@@ -322,6 +323,8 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("sessions_history")).toBe(false);
     expect(names.has("sessions_send")).toBe(false);
     expect(names.has("sessions_spawn")).toBe(false);
+    // Explicit subagent orchestration tool remains available (list/steer/kill with safeguards).
+    expect(names.has("subagents")).toBe(true);
 
     expect(names.has("read")).toBe(true);
     expect(names.has("exec")).toBe(true);
