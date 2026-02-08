@@ -382,6 +382,45 @@ async function killSubagentRun(params: {
   return { killed: true, sessionId };
 }
 
+/**
+ * Recursively kill all descendant subagent runs spawned by a given parent session key.
+ * This ensures that when a subagent is killed, all of its children (and their children) are also killed.
+ */
+async function cascadeKillChildren(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  parentChildSessionKey: string;
+  cache: Map<string, Record<string, SessionEntry>>;
+}): Promise<{ killed: number; labels: string[] }> {
+  const childRuns = listSubagentRunsForRequester(params.parentChildSessionKey);
+  let killed = 0;
+  const labels: string[] = [];
+
+  for (const run of childRuns) {
+    if (run.endedAt) {
+      continue;
+    }
+    const stopResult = await killSubagentRun({
+      cfg: params.cfg,
+      entry: run,
+      cache: params.cache,
+    });
+    if (stopResult.killed) {
+      killed += 1;
+      labels.push(resolveRunLabel(run));
+      // Recurse for grandchildren
+      const cascade = await cascadeKillChildren({
+        cfg: params.cfg,
+        parentChildSessionKey: run.childSessionKey,
+        cache: params.cache,
+      });
+      killed += cascade.killed;
+      labels.push(...cascade.labels);
+    }
+  }
+
+  return { killed, labels };
+}
+
 function buildListText(params: {
   active: Array<{ line: string }>;
   recent: Array<{ line: string }>;
@@ -523,6 +562,14 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
             if (stopResult.killed) {
               killed += 1;
               killedLabels.push(resolveRunLabel(entry));
+              // Cascade: also kill any children spawned by this subagent
+              const cascade = await cascadeKillChildren({
+                cfg,
+                parentChildSessionKey: entry.childSessionKey,
+                cache,
+              });
+              killed += cascade.killed;
+              killedLabels.push(...cascade.labels);
             }
           }
           return jsonResult({
@@ -546,10 +593,11 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
             error: resolved.error ?? "Unknown subagent target.",
           });
         }
+        const killCache = new Map<string, Record<string, SessionEntry>>();
         const stopResult = await killSubagentRun({
           cfg,
           entry: resolved.entry,
-          cache: new Map<string, Record<string, SessionEntry>>(),
+          cache: killCache,
         });
         if (!stopResult.killed) {
           return jsonResult({
@@ -561,6 +609,16 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
             text: `${resolveRunLabel(resolved.entry)} is already finished.`,
           });
         }
+        // Cascade: also kill any children spawned by the killed subagent
+        const cascade = await cascadeKillChildren({
+          cfg,
+          parentChildSessionKey: resolved.entry.childSessionKey,
+          cache: killCache,
+        });
+        const cascadeText =
+          cascade.killed > 0
+            ? ` (+ ${cascade.killed} descendant${cascade.killed === 1 ? "" : "s"})`
+            : "";
         return jsonResult({
           status: "ok",
           action: "kill",
@@ -568,7 +626,9 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
           runId: resolved.entry.runId,
           sessionKey: resolved.entry.childSessionKey,
           label: resolveRunLabel(resolved.entry),
-          text: `killed ${resolveRunLabel(resolved.entry)}.`,
+          cascadeKilled: cascade.killed,
+          cascadeLabels: cascade.killed > 0 ? cascade.labels : undefined,
+          text: `killed ${resolveRunLabel(resolved.entry)}${cascadeText}.`,
         });
       }
 
