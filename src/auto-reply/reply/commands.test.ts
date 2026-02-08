@@ -272,12 +272,12 @@ describe("handleCommands subagents", () => {
     const params = buildParams("/subagents list", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("active subagents:");
+    expect(result.reply?.text).toContain("active:");
     expect(result.reply?.text).toContain("recent (last 30m):");
-    expect(result.reply?.text).not.toContain("\n\nrecent (last 30m):");
+    expect(result.reply?.text).toContain("\n\nrecent (last 30m):");
   });
 
-  it("does not truncate subagent task text in /subagents list", async () => {
+  it("truncates long subagent task text in /subagents list", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
     addSubagentRunForTests({
@@ -300,9 +300,8 @@ describe("handleCommands subagents", () => {
     expect(result.reply?.text).toContain(
       "This is a deliberately long task description used to verify that subagent list output keeps the full task text",
     );
-    expect(result.reply?.text).not.toContain(
-      "This is a deliberately long task description used to verify that subagent list output keeps the full task text instead...",
-    );
+    expect(result.reply?.text).toContain("...");
+    expect(result.reply?.text).not.toContain("after a short hard cutoff.");
   });
 
   it("lists subagents for the current command session over the target session", async () => {
@@ -318,6 +317,16 @@ describe("handleCommands subagents", () => {
       createdAt: 1000,
       startedAt: 1000,
     });
+    addSubagentRunForTests({
+      runId: "run-2",
+      childSessionKey: "agent:main:subagent:def",
+      requesterSessionKey: "agent:main:slack:slash:u1",
+      requesterDisplayKey: "agent:main:slack:slash:u1",
+      task: "another thing",
+      cleanup: "keep",
+      createdAt: 2000,
+      startedAt: 2000,
+    });
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -329,8 +338,9 @@ describe("handleCommands subagents", () => {
     params.sessionKey = "agent:main:slack:slash:u1";
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("active subagents:");
+    expect(result.reply?.text).toContain("active:");
     expect(result.reply?.text).toContain("do thing");
+    expect(result.reply?.text).toContain("\n\n2.");
   });
 
   it("formats subagent usage with io and prompt/cache breakdown", async () => {

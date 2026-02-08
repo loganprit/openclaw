@@ -42,6 +42,7 @@ const COMMAND_STEER = "/steer";
 const COMMAND_TELL = "/tell";
 const ACTIONS = new Set(["list", "stop", "kill", "log", "send", "steer", "info", "help"]);
 const RECENT_WINDOW_MINUTES = 30;
+const SUBAGENT_TASK_PREVIEW_MAX = 110;
 
 function formatDurationCompact(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
@@ -87,6 +88,10 @@ function truncateLine(value: string, maxLength: number) {
 
 function compactLine(value: string) {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function formatTaskPreview(value: string) {
+  return truncateLine(compactLine(value), SUBAGENT_TASK_PREVIEW_MAX);
 }
 
 function resolveModelDisplay(
@@ -435,7 +440,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         );
         const usageText = resolveUsageDisplay(sessionEntry);
         const label = truncateLine(formatRunLabel(entry, { maxLength: 48 }), 48);
-        const task = compactLine(entry.task);
+        const task = formatTaskPreview(entry.task);
         const runtime = formatDurationCompact(now - (entry.startedAt ?? entry.createdAt));
         const status = resolveDisplayStatus(entry);
         const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
@@ -452,7 +457,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         );
         const usageText = resolveUsageDisplay(sessionEntry);
         const label = truncateLine(formatRunLabel(entry, { maxLength: 48 }), 48);
-        const task = compactLine(entry.task);
+        const task = formatTaskPreview(entry.task);
         const runtime = formatDurationCompact(
           (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt),
         );
@@ -462,17 +467,17 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         return line;
       });
 
-    const lines = ["active subagents:"];
+    const lines = ["active:"];
     if (activeLines.length === 0) {
       lines.push("(none)");
     } else {
-      lines.push(...activeLines);
+      lines.push(activeLines.join("\n\n"));
     }
-    lines.push(`recent (last ${RECENT_WINDOW_MINUTES}m):`);
+    lines.push("", `recent (last ${RECENT_WINDOW_MINUTES}m):`);
     if (recentLines.length === 0) {
       lines.push("(none)");
     } else {
-      lines.push(...recentLines);
+      lines.push(recentLines.join("\n\n"));
     }
     return { shouldContinue: false, reply: { text: lines.join("\n") } };
   }
