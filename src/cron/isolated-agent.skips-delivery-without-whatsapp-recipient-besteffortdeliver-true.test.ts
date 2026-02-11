@@ -25,12 +25,16 @@ vi.mock("../agents/tools/agent-step.js", () => ({
 }));
 vi.mock("../agents/subagent-registry.js", () => ({
   countActiveDescendantRuns: vi.fn(() => 0),
+  listDescendantRunsForRequester: vi.fn(() => []),
 }));
 
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
-import { countActiveDescendantRuns } from "../agents/subagent-registry.js";
+import {
+  countActiveDescendantRuns,
+  listDescendantRunsForRequester,
+} from "../agents/subagent-registry.js";
 import { readLatestAssistantReply } from "../agents/tools/agent-step.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 
@@ -100,6 +104,7 @@ describe("runCronIsolatedAgentTurn", () => {
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
     vi.mocked(runSubagentAnnounceFlow).mockReset().mockResolvedValue(true);
     vi.mocked(countActiveDescendantRuns).mockReset().mockReturnValue(0);
+    vi.mocked(listDescendantRunsForRequester).mockReset().mockReturnValue([]);
     vi.mocked(readLatestAssistantReply).mockReset().mockResolvedValue(undefined);
     setActivePluginRegistry(
       createTestRegistry([
@@ -547,6 +552,71 @@ describe("runCronIsolatedAgentTurn", () => {
         | { roundOneReply?: string }
         | undefined;
       expect(announceArgs?.roundOneReply).toBe(finalReply);
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+    });
+  });
+
+  it("falls back to completed child reply when parent stays on spawn ack", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      const initialReply =
+        "Subagent spawned to search for Oceanside weather. It'll auto-announce when done.";
+      const childReply =
+        "Here's the current weather for Oceanside, CA tonight: 61F, mostly cloudy, no rain.";
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: initialReply }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+      vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+      vi.mocked(listDescendantRunsForRequester).mockReturnValue([
+        {
+          runId: "child-run-1",
+          childSessionKey: "agent:main:subagent:child-1",
+          requesterSessionKey: "agent:main:cron:job-1",
+          requesterDisplayKey: "agent:main:cron:job-1",
+          task: "nested-weather-search",
+          cleanup: "keep",
+          createdAt: Date.now(),
+          endedAt: Date.now() + 1000,
+        },
+      ]);
+      vi.mocked(readLatestAssistantReply).mockImplementation(async ({ sessionKey }) => {
+        if (sessionKey === "agent:main:subagent:child-1") {
+          return childReply;
+        }
+        return initialReply;
+      });
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath, {
+          channels: { telegram: { botToken: "t-1" } },
+        }),
+        deps,
+        job: {
+          ...makeJob({ kind: "agentTurn", message: "do it" }),
+          delivery: { mode: "announce", channel: "telegram", to: "123" },
+        },
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      const announceArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
+        | { roundOneReply?: string }
+        | undefined;
+      expect(announceArgs?.roundOneReply).toBe(childReply);
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });
   });

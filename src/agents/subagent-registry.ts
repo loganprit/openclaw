@@ -726,6 +726,36 @@ export function countActiveDescendantRuns(rootSessionKey: string): number {
   return count;
 }
 
+export function listDescendantRunsForRequester(rootSessionKey: string): SubagentRunRecord[] {
+  const root = rootSessionKey.trim();
+  if (!root) {
+    return [];
+  }
+  const runs = getRunsSnapshotForRead();
+  const pending = [root];
+  const visited = new Set<string>([root]);
+  const descendants: SubagentRunRecord[] = [];
+  while (pending.length > 0) {
+    const requester = pending.shift();
+    if (!requester) {
+      continue;
+    }
+    for (const entry of runs.values()) {
+      if (entry.requesterSessionKey !== requester) {
+        continue;
+      }
+      descendants.push(entry);
+      const childKey = entry.childSessionKey.trim();
+      if (!childKey || visited.has(childKey)) {
+        continue;
+      }
+      visited.add(childKey);
+      pending.push(childKey);
+    }
+  }
+  return descendants;
+}
+
 export function initSubagentRegistry() {
   restoreSubagentRunsOnce();
 }

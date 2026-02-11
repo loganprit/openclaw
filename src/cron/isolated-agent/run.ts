@@ -28,7 +28,10 @@ import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { runSubagentAnnounceFlow } from "../../agents/subagent-announce.js";
-import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
+import {
+  countActiveDescendantRuns,
+  listDescendantRunsForRequester,
+} from "../../agents/subagent-registry.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { readLatestAssistantReply } from "../../agents/tools/agent-step.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
@@ -144,6 +147,54 @@ function expectsSubagentFollowup(value: string): boolean {
     "wait for them to report back",
   ];
   return hints.some((hint) => normalized.includes(hint));
+}
+
+async function readDescendantSubagentFallbackReply(params: {
+  sessionKey: string;
+  runStartedAt: number;
+}): Promise<string | undefined> {
+  const descendants = listDescendantRunsForRequester(params.sessionKey)
+    .filter(
+      (entry) =>
+        typeof entry.endedAt === "number" &&
+        entry.endedAt >= params.runStartedAt &&
+        entry.childSessionKey.trim().length > 0,
+    )
+    .toSorted((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0));
+  if (descendants.length === 0) {
+    return undefined;
+  }
+
+  const latestByChild = new Map<string, (typeof descendants)[number]>();
+  for (const entry of descendants) {
+    const childKey = entry.childSessionKey.trim();
+    if (!childKey) {
+      continue;
+    }
+    const current = latestByChild.get(childKey);
+    if (!current || (entry.endedAt ?? 0) >= (current.endedAt ?? 0)) {
+      latestByChild.set(childKey, entry);
+    }
+  }
+
+  const replies: string[] = [];
+  const latestRuns = [...latestByChild.values()]
+    .toSorted((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0))
+    .slice(-4);
+  for (const entry of latestRuns) {
+    const reply = (await readLatestAssistantReply({ sessionKey: entry.childSessionKey }))?.trim();
+    if (!reply || reply.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
+      continue;
+    }
+    replies.push(reply);
+  }
+  if (replies.length === 0) {
+    return undefined;
+  }
+  if (replies.length === 1) {
+    return replies[0];
+  }
+  return replies.join("\n\n");
 }
 
 async function waitForDescendantSubagentSummary(params: {
@@ -647,13 +698,23 @@ export async function runCronIsolatedAgentTurn(params: {
       const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
       const hadActiveDescendants = activeSubagentRuns > 0;
       if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
-        const finalReply = await waitForDescendantSubagentSummary({
+        let finalReply = await waitForDescendantSubagentSummary({
           sessionKey: agentSessionKey,
           initialReply: initialSynthesizedText,
           timeoutMs,
           observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
         });
         activeSubagentRuns = countActiveDescendantRuns(agentSessionKey);
+        if (
+          !finalReply &&
+          activeSubagentRuns === 0 &&
+          (hadActiveDescendants || expectedSubagentFollowup)
+        ) {
+          finalReply = await readDescendantSubagentFallbackReply({
+            sessionKey: agentSessionKey,
+            runStartedAt,
+          });
+        }
         if (finalReply && activeSubagentRuns === 0) {
           outputText = finalReply;
           summary = pickSummaryFromOutput(finalReply) ?? summary;
