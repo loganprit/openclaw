@@ -145,6 +145,23 @@ describe("web_search grok config resolution", () => {
 });
 
 describe("web_search grok response parsing", () => {
+  it("skips non-message output entries and extracts from message output", () => {
+    const result = extractGrokContent({
+      output: [
+        {
+          type: "reasoning",
+          content: [],
+        },
+        {
+          type: "message",
+          content: [{ type: "output_text", text: "hello from message output" }],
+        },
+      ],
+    });
+    expect(result.text).toBe("hello from message output");
+    expect(result.annotationCitations).toEqual([]);
+  });
+
   it("extracts content from Responses API message blocks", () => {
     const result = extractGrokContent({
       output: [

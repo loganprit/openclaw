@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Version alignment: bump manifests and package versions to `2026.2.10`; keep `appcast.xml` unchanged until the next macOS release cut.
+- Tools/web_search: handle xAI Responses API message/output parsing and citation extraction for Grok provider. (#13547) Thanks @0xRaini.
 
 ## 2026.2.9
 
