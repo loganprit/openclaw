@@ -46,6 +46,7 @@ final class GatewayProcessManager {
     private var testingConnection: GatewayConnection?
     #endif
     private let logger = Logger(subsystem: "ai.openclaw", category: "gateway.process")
+    private let directSpawner = DirectGatewaySpawner.shared
 
     private let logLimit = 20000 // characters to keep in-memory
     private let environmentRefreshMinInterval: TimeInterval = 30
@@ -55,6 +56,15 @@ final class GatewayProcessManager {
         #else
         return .shared
         #endif
+    }
+
+    private init() {
+        self.directSpawner.onLog = { [weak self] text in
+            self?.appendLog(text)
+        }
+        self.directSpawner.onEvent = { [weak self] event in
+            self?.handleDirectSpawnerEvent(event)
+        }
     }
 
     func setActive(_ active: Bool) {
@@ -79,6 +89,10 @@ final class GatewayProcessManager {
 
     func ensureLaunchAgentEnabledIfNeeded() async {
         guard !CommandResolver.connectionModeIsRemote() else { return }
+        guard GatewaySpawnMode.current() == .launchd else {
+            self.appendLog("[gateway] launchd auto-enable skipped (direct spawn mode)\n")
+            return
+        }
         if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() {
             self.appendLog("[gateway] launchd auto-enable skipped (attach-only)\n")
             self.logger.info("gateway launchd auto-enable skipped (disable marker set)")
@@ -119,7 +133,12 @@ final class GatewayProcessManager {
             if await self.attachExistingGatewayIfAvailable() {
                 return
             }
-            await self.enableLaunchdGateway()
+            switch GatewaySpawnMode.current() {
+            case .launchd:
+                await self.enableLaunchdGateway()
+            case .direct:
+                await self.enableDirectGateway()
+            }
         }
     }
 
@@ -129,6 +148,7 @@ final class GatewayProcessManager {
         self.lastFailureReason = nil
         self.status = .stopped
         self.logger.info("gateway stop requested")
+        Task { await self.directSpawner.stop() }
         if CommandResolver.connectionModeIsRemote() {
             return
         }
@@ -139,6 +159,10 @@ final class GatewayProcessManager {
                 bundlePath: bundlePath,
                 port: GatewayEnvironment.gatewayPort())
         }
+    }
+
+    func stopForApplicationTermination() {
+        self.directSpawner.stopForApplicationTermination()
     }
 
     func clearLastFailure() {
@@ -356,10 +380,94 @@ final class GatewayProcessManager {
         self.logger.warning("gateway start timed out")
     }
 
+    private func enableDirectGateway() async {
+        self.existingGatewayDetails = nil
+        let resolution = await Task.detached(priority: .utility) {
+            GatewayEnvironment.resolveGatewayCommand()
+        }.value
+        await MainActor.run { self.environmentStatus = resolution.status }
+        guard let command = resolution.command else {
+            await MainActor.run {
+                self.status = .failed(resolution.status.message)
+            }
+            self.logger.error("gateway command resolve failed: \(resolution.status.message)")
+            return
+        }
+
+        do {
+            try await self.directSpawner.spawn(command: command, env: nil)
+        } catch {
+            let reason = error.localizedDescription
+            self.status = .failed(reason)
+            self.lastFailureReason = reason
+            self.appendLog("[gateway] direct spawn failed: \(reason)\n")
+            self.logger.error("gateway direct spawn failed: \(reason)")
+            return
+        }
+
+        let ready = await self.waitForDirectGatewayReady(
+            timeout: 6,
+            reason: "direct process started")
+        if !ready {
+            self.status = .failed("Gateway did not start in time")
+            self.lastFailureReason = "direct start timeout"
+            self.logger.warning("gateway direct start timed out")
+        }
+    }
+
+    private func waitForDirectGatewayReady(timeout: TimeInterval, reason: String) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        let port = GatewayEnvironment.gatewayPort()
+        while Date() < deadline {
+            if !self.desiredActive { return false }
+            do {
+                _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
+                let details = self.directSpawner.processID.map { "pid \($0), direct" } ?? "port \(port), direct"
+                self.clearLastFailure()
+                self.status = .running(details: details)
+                self.appendLog("[gateway] \(reason)\n")
+                self.refreshControlChannelIfNeeded(reason: "gateway started")
+                return true
+            } catch {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
+        }
+        return false
+    }
+
     private func appendLog(_ chunk: String) {
         self.log.append(chunk)
         if self.log.count > self.logLimit {
             self.log = String(self.log.suffix(self.logLimit))
+        }
+    }
+
+    private func handleDirectSpawnerEvent(_ event: DirectGatewaySpawner.Event) {
+        switch event {
+        case let .started(pid, restartAttempt):
+            if restartAttempt > 0 {
+                self.status = .starting
+                self.appendLog("[gateway] direct process restarted (attempt \(restartAttempt), pid \(pid))\n")
+                Task { [weak self] in
+                    guard let self else { return }
+                    _ = await self.waitForDirectGatewayReady(
+                        timeout: 6,
+                        reason: "direct process restarted")
+                }
+            } else {
+                self.appendLog("[gateway] direct process started (pid \(pid))\n")
+            }
+        case let .restartScheduled(attempt, delaySeconds, reason):
+            self.status = .starting
+            let roundedDelay = String(format: "%.1f", delaySeconds)
+            self.appendLog(
+                "[gateway] direct process exited (\(reason)); restart attempt \(attempt)/5 in \(roundedDelay)s\n")
+        case let .gaveUp(reason):
+            self.status = .failed(reason)
+            self.lastFailureReason = reason
+            self.appendLog("[gateway] \(reason)\n")
+        case .stopped:
+            self.appendLog("[gateway] direct process stopped\n")
         }
     }
 

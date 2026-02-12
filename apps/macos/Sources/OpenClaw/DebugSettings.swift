@@ -32,6 +32,7 @@ struct DebugSettings: View {
     @State private var pendingKill: DebugActions.PortListener?
     @AppStorage(debugFileLogEnabledKey) private var diagnosticsFileLogEnabled: Bool = false
     @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = AppLogLevel.default.rawValue
+    @AppStorage(gatewaySpawnModeKey) private var gatewaySpawnModeRaw: String = GatewaySpawnMode.launchd.rawValue
 
     @State private var canvasSessionKey: String = "main"
     @State private var canvasStatus: String?
@@ -66,6 +67,9 @@ struct DebugSettings: View {
             .padding(.vertical, 18)
             .groupBoxStyle(PlainSettingsGroupBoxStyle())
         }
+        .onChange(of: self.gatewaySpawnModeRaw) { _, newValue in
+            self.applyGatewaySpawnModeChange(newValue)
+        }
         .task {
             guard !self.isPreview else { return }
             await self.reloadModels()
@@ -85,6 +89,23 @@ struct DebugSettings: View {
     private var launchdSection: some View {
         GroupBox("Gateway startup") {
             VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .center, spacing: 10) {
+                    Text("Spawn mode")
+                        .foregroundStyle(.secondary)
+                        .frame(width: self.labelColumnWidth, alignment: .leading)
+                    Picker("Spawn mode", selection: self.gatewaySpawnModeBinding) {
+                        ForEach(GatewaySpawnMode.allCases) { mode in
+                            Text(mode.title).tag(mode.rawValue)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                }
+
+                Text("Direct mode inherits app permissions (including FDA) but only runs while the app is open.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 Toggle("Attach only (skip launchd install)", isOn: self.$launchAgentWriteDisabled)
                     .onChange(of: self.launchAgentWriteDisabled) { _, newValue in
                         self.launchAgentWriteError = GatewayLaunchAgentManager.setLaunchAgentWriteDisabled(newValue)
@@ -827,6 +848,34 @@ struct DebugSettings: View {
 
     private var canRestartGateway: Bool {
         self.state.connectionMode == .local
+    }
+
+    private var gatewaySpawnModeBinding: Binding<String> {
+        Binding(
+            get: {
+                GatewaySpawnMode(rawValue: self.gatewaySpawnModeRaw)?.rawValue ?? GatewaySpawnMode.launchd.rawValue
+            },
+            set: { newValue in
+                self.gatewaySpawnModeRaw = GatewaySpawnMode(rawValue: newValue)?.rawValue
+                    ?? GatewaySpawnMode.launchd.rawValue
+            })
+    }
+
+    private func applyGatewaySpawnModeChange(_ rawValue: String) {
+        let normalized = GatewaySpawnMode(rawValue: rawValue) ?? .launchd
+        if normalized.rawValue != rawValue {
+            self.gatewaySpawnModeRaw = normalized.rawValue
+            return
+        }
+
+        guard self.state.connectionMode == .local else { return }
+        let shouldRunGateway = !self.state.isPaused
+        GatewayProcessManager.shared.stop()
+        guard shouldRunGateway else { return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            GatewayProcessManager.shared.setActive(true)
+        }
     }
 
     private func configURL() -> URL {
