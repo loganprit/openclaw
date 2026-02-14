@@ -215,7 +215,7 @@ final class DirectGatewaySpawner {
         }
     }
 
-    private static func detachOutputHandler(_ handle: FileHandle) {
+    nonisolated private static func detachOutputHandler(_ handle: FileHandle) {
         if handle.readabilityHandler != nil {
             handle.readabilityHandler = nil
         }
