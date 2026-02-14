@@ -9,8 +9,8 @@ title: "macOS App"
 # OpenClaw macOS Companion (menu bar + gateway broker)
 
 The macOS app is the **menu‑bar companion** for OpenClaw. It owns permissions,
-manages/attaches to the Gateway locally (launchd or manual), and exposes macOS
-capabilities to the agent as a node.
+manages/attaches to the Gateway locally (launchd default, child mode opt-in),
+and exposes macOS capabilities to the agent as a node.
 
 ## What it does
 
@@ -25,12 +25,20 @@ capabilities to the agent as a node.
 
 ## Local vs remote mode
 
-- **Local** (default): the app attaches to a running local Gateway if present;
-  otherwise it enables the launchd service via `openclaw gateway install`.
+- **Local**: the app attaches to a running local Gateway if present.
+  If none is reachable, it starts based on selected local runtime:
+  - **Launchd** (default): enables launchd service via `openclaw gateway install`.
+  - **Child process** (opt-in): spawns `openclaw gateway --port ... --bind ... --allow-unconfigured`.
 - **Remote**: the app connects to a Gateway over SSH/Tailscale and never starts
   a local process.
   The app starts the local **node host service** so the remote Gateway can reach this Mac.
-  The app does not spawn the Gateway as a child process.
+  The app does not spawn a local Gateway process in remote mode.
+
+## Local runtime behavior
+
+- **Launchd**: persistent supervision; gateway survives app quit.
+- **Child**: process inherits app context and is tied to app lifecycle unless handed off.
+- **Quit in child mode**: prompt offers stop child + quit, handoff to launchd + quit, or cancel; includes remember choice.
 
 ## Launchd control
 

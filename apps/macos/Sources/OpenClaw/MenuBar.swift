@@ -74,8 +74,22 @@ struct OpenClawApp: App {
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
         }
         .onChange(of: self.state.connectionMode) { _, mode in
-            Task { await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused) }
+            Task {
+                await ConnectionModeCoordinator.shared.apply(
+                    mode: mode,
+                    launchMode: self.state.localGatewayLaunchMode,
+                    paused: self.state.isPaused)
+            }
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
+        }
+        .onChange(of: self.state.localGatewayLaunchMode) { _, mode in
+            guard self.state.connectionMode == .local else { return }
+            Task {
+                await ConnectionModeCoordinator.shared.apply(
+                    mode: .local,
+                    launchMode: mode,
+                    paused: self.state.isPaused)
+            }
         }
 
         Settings {
@@ -273,7 +287,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.state = AppStateStore.shared
         AppActivationPolicy.apply(showDockIcon: self.state?.showDockIcon ?? false)
         if let state {
-            Task { await ConnectionModeCoordinator.shared.apply(mode: state.connectionMode, paused: state.isPaused) }
+            Task {
+                await ConnectionModeCoordinator.shared.apply(
+                    mode: state.connectionMode,
+                    launchMode: state.localGatewayLaunchMode,
+                    paused: state.isPaused)
+            }
         }
         TerminationSignalWatcher.shared.start()
         NodePairingApprovalPrompter.shared.start()
@@ -317,6 +336,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await PeekabooBridgeHostCoordinator.shared.stop() }
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let state = self.state ?? AppStateStore.shared
+        guard state.connectionMode == .local,
+              state.localGatewayLaunchMode == .child,
+              GatewayProcessManager.shared.hasRunningChildGateway()
+        else {
+            return .terminateNow
+        }
+
+        if !state.childGatewayQuitAlwaysAsk,
+           let remembered = state.childGatewayQuitRememberedAction
+        {
+            self.performQuitAction(remembered, sender: sender)
+            return .terminateLater
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Quit with child gateway running?"
+        alert.informativeText =
+            "OpenClaw is running Gateway as a child process. Choose whether to stop it or hand off to launchd."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Stop Gateway and Quit")
+        alert.addButton(withTitle: "Handoff to Launchd and Quit")
+        alert.addButton(withTitle: "Cancel")
+
+        let rememberButton = NSButton(
+            checkboxWithTitle: "Remember my choice",
+            target: nil,
+            action: nil)
+        rememberButton.state = .off
+        alert.accessoryView = rememberButton
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            self.persistQuitPreference(
+                remember: rememberButton.state == .on,
+                action: .stopGateway,
+                state: state)
+            self.performQuitAction(.stopGateway, sender: sender)
+            return .terminateLater
+        case .alertSecondButtonReturn:
+            self.persistQuitPreference(
+                remember: rememberButton.state == .on,
+                action: .handoffToLaunchd,
+                state: state)
+            self.performQuitAction(.handoffToLaunchd, sender: sender)
+            return .terminateLater
+        default:
+            return .terminateCancel
+        }
+    }
+
     @MainActor
     private func scheduleFirstRunOnboardingIfNeeded() {
         let seenVersion = UserDefaults.standard.integer(forKey: onboardingVersionKey)
@@ -331,6 +402,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let bundleID = Bundle.main.bundleIdentifier else { return false }
         let running = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleID }
         return running.count > 1
+    }
+
+    private func persistQuitPreference(
+        remember: Bool,
+        action: AppState.ChildGatewayQuitAction,
+        state: AppState)
+    {
+        if remember {
+            state.childGatewayQuitAlwaysAsk = false
+            state.childGatewayQuitRememberedAction = action
+        } else {
+            state.childGatewayQuitAlwaysAsk = true
+            state.childGatewayQuitRememberedAction = nil
+        }
+    }
+
+    private func performQuitAction(_ action: AppState.ChildGatewayQuitAction, sender: NSApplication) {
+        Task {
+            let error = await GatewayProcessManager.shared.applyQuitAction(action)
+            await MainActor.run {
+                if let error {
+                    let alert = NSAlert()
+                    alert.messageText = "Could not complete gateway quit action"
+                    alert.informativeText = error
+                    alert.alertStyle = .warning
+                    alert.runModal()
+                    sender.reply(toApplicationShouldTerminate: false)
+                } else {
+                    sender.reply(toApplicationShouldTerminate: true)
+                }
+            }
+        }
     }
 }
 

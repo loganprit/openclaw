@@ -357,8 +357,9 @@ actor PortGuardian {
             if port == GatewayEnvironment.gatewayPort() { return cmd.contains("ssh") }
             return false
         case .local:
-            // The gateway daemon may listen as `openclaw` or as its runtime (`node`, `bun`, etc).
+            // Gateway listeners may appear as `openclaw`, or runtime wrappers (`node`, `bun`, etc).
             if full.contains("gateway-daemon") { return true }
+            if full.contains(" gateway ") { return true }
             // If args are unavailable, treat a CLI listener as expected.
             if cmd.contains("openclaw"), full == cmd { return true }
             return false

@@ -189,9 +189,12 @@ enum GatewayEnvironment {
         }
 
         let port = self.gatewayPort()
-        if let gatewayBin {
+        if gatewayBin != nil {
             let bind = self.preferredGatewayBind() ?? "loopback"
-            let cmd = [gatewayBin, "gateway-daemon", "--port", "\(port)", "--bind", bind]
+            let cmd = CommandResolver.openclawCommand(
+                subcommand: "gateway",
+                extraArgs: ["--port", "\(port)", "--bind", bind, "--allow-unconfigured"],
+                configRoot: ["gateway": ["mode": "local"]])
             return GatewayCommandResolution(status: status, command: cmd)
         }
 
@@ -199,7 +202,7 @@ enum GatewayEnvironment {
            case let .success(resolvedRuntime) = runtime
         {
             let bind = self.preferredGatewayBind() ?? "loopback"
-            let cmd = [resolvedRuntime.path, entry, "gateway-daemon", "--port", "\(port)", "--bind", bind]
+            let cmd = [resolvedRuntime.path, entry, "gateway", "--port", "\(port)", "--bind", bind, "--allow-unconfigured"]
             return GatewayCommandResolution(status: status, command: cmd)
         }
 

@@ -13,12 +13,19 @@ struct GatewayAutostartPolicyTests {
     @Test func ensuresLaunchAgentWhenLocalAndNotAttachOnly() {
         #expect(GatewayAutostartPolicy.shouldEnsureLaunchAgent(
             mode: .local,
+            launchMode: .launchd,
             paused: false))
         #expect(!GatewayAutostartPolicy.shouldEnsureLaunchAgent(
             mode: .local,
+            launchMode: .launchd,
             paused: true))
         #expect(!GatewayAutostartPolicy.shouldEnsureLaunchAgent(
+            mode: .local,
+            launchMode: .child,
+            paused: false))
+        #expect(!GatewayAutostartPolicy.shouldEnsureLaunchAgent(
             mode: .remote,
+            launchMode: .launchd,
             paused: false))
     }
 }

@@ -1,5 +1,5 @@
 ---
-summary: "Gateway runtime on macOS (external launchd service)"
+summary: "Gateway runtime on macOS (launchd default, optional child mode)"
 read_when:
   - Packaging OpenClaw.app
   - Debugging the macOS gateway launchd service
@@ -7,12 +7,17 @@ read_when:
 title: "Gateway on macOS"
 ---
 
-# Gateway on macOS (external launchd)
+# Gateway on macOS
 
 OpenClaw.app no longer bundles Node/Bun or the Gateway runtime. The macOS app
-expects an **external** `openclaw` CLI install, does not spawn the Gateway as a
-child process, and manages a per‑user launchd service to keep the Gateway
-running (or attaches to an existing local Gateway if one is already running).
+expects an **external** `openclaw` CLI install.
+
+For Local mode, OpenClaw supports two launch strategies:
+
+| Mode      | Default     | Supervision                         | Permission context            |
+| --------- | ----------- | ----------------------------------- | ----------------------------- |
+| `launchd` | Yes         | Persistent/background (LaunchAgent) | launchd service process       |
+| `child`   | No (opt-in) | Bound to OpenClaw app lifecycle     | inherits OpenClaw app context |
 
 ## Install the CLI (required for local mode)
 
@@ -24,7 +29,7 @@ npm install -g openclaw@<version>
 
 The macOS app’s **Install CLI** button runs the same flow via npm/pnpm (bun not recommended for Gateway runtime).
 
-## Launchd (Gateway as LaunchAgent)
+## Launchd mode (default)
 
 Label:
 
@@ -46,10 +51,26 @@ Behavior:
 - App quit does **not** stop the gateway (launchd keeps it alive).
 - If a Gateway is already running on the configured port, the app attaches to
   it instead of starting a new one.
+- Switching from child mode back to launchd clears the attach-only marker automatically.
 
 Logging:
 
 - launchd stdout/err: `/tmp/openclaw/openclaw-gateway.log`
+
+## Child mode (opt-in)
+
+When enabled in **Settings > General > Gateway runtime**, OpenClaw starts
+`openclaw gateway --port <port> --bind <bind> --allow-unconfigured` as a child process.
+
+Behavior:
+
+- Child process is supervised by the app with bounded restart backoff.
+- If the child exits repeatedly, OpenClaw surfaces a failed state instead of infinite restarts.
+- On quit, OpenClaw prompts:
+  - Stop child gateway and quit
+  - Hand off to launchd and quit
+  - Cancel
+- Prompt supports “Remember my choice”.
 
 ## Version compatibility
 
