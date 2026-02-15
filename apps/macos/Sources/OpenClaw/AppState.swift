@@ -24,6 +24,16 @@ final class AppState {
         case remote
     }
 
+    enum LocalGatewayLaunchMode: String {
+        case launchd
+        case child
+    }
+
+    enum ChildGatewayQuitAction: String {
+        case stopGateway
+        case handoffToLaunchd
+    }
+
     enum RemoteTransport: String {
         case ssh
         case direct
@@ -171,6 +181,34 @@ final class AppState {
         }
     }
 
+    var localGatewayLaunchMode: LocalGatewayLaunchMode {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.localGatewayLaunchMode.rawValue, forKey: localGatewayLaunchModeKey)
+            }
+        }
+    }
+
+    var childGatewayQuitAlwaysAsk: Bool {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.childGatewayQuitAlwaysAsk, forKey: childGatewayQuitAlwaysAskKey)
+            }
+        }
+    }
+
+    var childGatewayQuitRememberedAction: ChildGatewayQuitAction? {
+        didSet {
+            self.ifNotPreview {
+                if let action = self.childGatewayQuitRememberedAction {
+                    UserDefaults.standard.set(action.rawValue, forKey: childGatewayQuitRememberedActionKey)
+                } else {
+                    UserDefaults.standard.removeObject(forKey: childGatewayQuitRememberedActionKey)
+                }
+            }
+        }
+    }
+
     var remoteTransport: RemoteTransport {
         didSet { self.syncGatewayConfigIfNeeded() }
     }
@@ -285,6 +323,17 @@ final class AppState {
         let resolvedConnectionMode = ConnectionModeResolver.resolve(root: configRoot).mode
         self.remoteTransport = configRemoteTransport
         self.connectionMode = resolvedConnectionMode
+        self.localGatewayLaunchMode =
+            LocalGatewayLaunchMode(rawValue: UserDefaults.standard.string(forKey: localGatewayLaunchModeKey) ?? "")
+            ?? .launchd
+        if UserDefaults.standard.object(forKey: childGatewayQuitAlwaysAskKey) == nil {
+            self.childGatewayQuitAlwaysAsk = true
+            UserDefaults.standard.set(true, forKey: childGatewayQuitAlwaysAskKey)
+        } else {
+            self.childGatewayQuitAlwaysAsk = UserDefaults.standard.bool(forKey: childGatewayQuitAlwaysAskKey)
+        }
+        self.childGatewayQuitRememberedAction = ChildGatewayQuitAction(
+            rawValue: UserDefaults.standard.string(forKey: childGatewayQuitRememberedActionKey) ?? "")
 
         let storedRemoteTarget = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
         if resolvedConnectionMode == .remote,
@@ -684,6 +733,9 @@ extension AppState {
         state.iconOverride = .system
         state.heartbeatsEnabled = true
         state.connectionMode = .local
+        state.localGatewayLaunchMode = .launchd
+        state.childGatewayQuitAlwaysAsk = true
+        state.childGatewayQuitRememberedAction = nil
         state.remoteTransport = .ssh
         state.canvasEnabled = true
         state.remoteTarget = "user@example.com"

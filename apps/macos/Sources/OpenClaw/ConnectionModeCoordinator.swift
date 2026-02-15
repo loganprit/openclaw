@@ -10,7 +10,11 @@ final class ConnectionModeCoordinator {
 
     /// Apply the requested connection mode by starting/stopping local gateway,
     /// managing the control-channel SSH tunnel, and cleaning up chat windows/panels.
-    func apply(mode: AppState.ConnectionMode, paused: Bool) async {
+    func apply(
+        mode: AppState.ConnectionMode,
+        launchMode: AppState.LocalGatewayLaunchMode,
+        paused: Bool) async
+    {
         if let lastMode = self.lastMode, lastMode != mode {
             GatewayProcessManager.shared.clearLastFailure()
             NodesStore.shared.lastError = nil
@@ -37,6 +41,7 @@ final class ConnectionModeCoordinator {
                 GatewayProcessManager.shared.setActive(true)
                 if GatewayAutostartPolicy.shouldEnsureLaunchAgent(
                     mode: .local,
+                    launchMode: launchMode,
                     paused: paused)
                 {
                     Task { await GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded() }

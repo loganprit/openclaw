@@ -119,6 +119,7 @@ struct GeneralSettings: View {
             }
 
             if self.state.connectionMode == .local {
+                self.localGatewayLaunchModeSection
                 // In Nix mode, gateway is managed declaratively - no install buttons.
                 if !self.isNixMode {
                     self.gatewayInstallerCard
@@ -133,6 +134,55 @@ struct GeneralSettings: View {
                 self.remoteCard
             }
         }
+    }
+
+    private var localGatewayLaunchModeSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Picker("Gateway runtime", selection: self.$state.localGatewayLaunchMode) {
+                Text("Launchd service (default)").tag(AppState.LocalGatewayLaunchMode.launchd)
+                Text("Child process (inherits app permissions)").tag(AppState.LocalGatewayLaunchMode.child)
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(width: 320, alignment: .leading)
+
+            let details = switch self.state.localGatewayLaunchMode {
+            case .launchd:
+                "Launchd keeps Gateway running in the background, even when OpenClaw is closed."
+            case .child:
+                "Gateway runs as an OpenClaw child process and stops when the app exits unless you hand off to launchd."
+            }
+            Text(details)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if self.state.localGatewayLaunchMode == .child {
+                Toggle("Always ask before quitting", isOn: self.$state.childGatewayQuitAlwaysAsk)
+                    .onChange(of: self.state.childGatewayQuitAlwaysAsk) { _, alwaysAsk in
+                        if alwaysAsk {
+                            self.state.childGatewayQuitRememberedAction = nil
+                        } else if self.state.childGatewayQuitRememberedAction == nil {
+                            self.state.childGatewayQuitRememberedAction = .stopGateway
+                        }
+                    }
+
+                Picker("If not asking", selection: self.childQuitRememberedActionBinding) {
+                    Text("Stop child gateway and quit").tag(AppState.ChildGatewayQuitAction.stopGateway)
+                    Text("Hand off to launchd and quit").tag(AppState.ChildGatewayQuitAction.handoffToLaunchd)
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .frame(width: 320, alignment: .leading)
+                .disabled(self.state.childGatewayQuitAlwaysAsk)
+            }
+        }
+    }
+
+    private var childQuitRememberedActionBinding: Binding<AppState.ChildGatewayQuitAction> {
+        Binding(
+            get: { self.state.childGatewayQuitRememberedAction ?? .stopGateway },
+            set: { self.state.childGatewayQuitRememberedAction = $0 })
     }
 
     private var remoteCard: some View {
@@ -385,7 +435,13 @@ struct GeneralSettings: View {
             Button("Recheck") { self.refreshGatewayStatus() }
                 .buttonStyle(.bordered)
 
-            Text("Gateway auto-starts in local mode via launchd (\(gatewayLaunchdLabel)).")
+            let modeSummary = switch self.state.localGatewayLaunchMode {
+            case .launchd:
+                "Gateway auto-starts in local mode via launchd (\(gatewayLaunchdLabel))."
+            case .child:
+                "Gateway auto-starts in local mode as a child process (permission-inheriting mode)."
+            }
+            Text(modeSummary)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
